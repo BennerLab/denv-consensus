@@ -12,30 +12,42 @@ def get_subtype_reference(wildcards):
 
 rule all:
     input:
-        expand("consensus/{sample}.fasta", sample=sample_df.index)
+        expand("consensus/{sample}.fasta", sample=sample_df.index),
+        "mafft/alignment.txt",
+        "multiqc_report.html"
+
+rule multiqc:
+    input:
+        expand(["megahit/{sample}/{sample}.log", "align/{sample}.stats", "align/{sample}.covstats"], sample=sample_df.index)
+    output:
+        "multiqc_report.html"
+    shell:
+        "multiqc --force {input}"
 
 rule assembly:
     input:
         r1=lambda x: "reads/" + sample_df.loc[x.sample, "read1"],
         r2=lambda x: "reads/" + sample_df.loc[x.sample, "read2"]
     output:
-        "megahit/{sample}/final.contigs.fa"
+        "megahit/{sample}/{sample}.contigs.fa"
     threads: 1 # currently fails on Mac if more than one thread is used
+    log:
+        "megahit/{sample}/{sample}.log"
     shell:
         """
         rm -rf megahit/{wildcards.sample}
-        megahit --num-cpu-threads {threads} -1 {input.r1} -2 {input.r2} -o megahit/{wildcards.sample} 2> /dev/null
+        megahit --num-cpu-threads {threads} -1 {input.r1} -2 {input.r2} -o megahit/{wildcards.sample} --out-prefix {wildcards.sample} 2> /dev/null
         """
 
 rule align_contigs:
     input:
-        "megahit/{sample}/final.contigs.fa"
+        "megahit/{sample}/{sample}.contigs.fa"
     output:
         "megahit/{sample}/contigs.paf"
     params:
         reference="reference/NCBI.fasta"
     log:
-        "megahit/{sample}.log"
+        "megahit/{sample}.contig_minimap2.log"
     threads: 3
     shell:
         "minimap2 -t {threads} {params.reference} {input} > {output} 2> {log}"
@@ -46,15 +58,20 @@ rule align_reads:
         r2=lambda x: "reads/" + sample_df.loc[x.sample, "read2"],
         consensus="megahit/{sample}/contigs.paf"
     output:
-        "align/{sample}.bam"
+        bam="align/{sample}.bam"
     params:
         reference=get_subtype_reference
-        # function to read PAF and return correct reference
     log:
-        "align/{sample}.log"
+        minimap2="align/{sample}.log",
+        stats="align/{sample}.stats",
+        coverage="align/{sample}.covstats"
     threads: 3
     shell:
-        "minimap2 -a -t {threads} {params.reference} {input} 2> {log} | samtools view -u -F 4 | samtools sort -o {output}"
+        """
+        minimap2 -a -t {threads} {params.reference} {input} 2> {log.minimap2} | samtools view -u | samtools sort -o {output}
+        samtools stats {output} > {log.stats}
+        samtools coverage {output} > {log.coverage}
+        """
 
 rule generate_consensus:
     input:
@@ -64,10 +81,23 @@ rule generate_consensus:
         vcf="consensus/{sample}.vcf.gz",
         fasta="consensus/{sample}.fasta"
     params:
-        reference=get_subtype_reference
+        reference=get_subtype_reference,
+        sequence_prefix=lambda wildcards: f"{wildcards.sample}-",
+        depth=10000,
     shell:
         """
-        bcftools mpileup -E -Ou -f {params.reference} {input.alignments} |bcftools call -mv -Oz -o {output.vcf}
-        tabix {output.vcf}
-        bcftools consensus {output.vcf} -f {params.reference} -o {output.fasta}
+        bcftools mpileup --max-depth {params.depth} --redo-BAQ --output-type u --fasta-ref {params.reference} {input.alignments} | bcftools call --write-index --consensus-caller --variants-only --output-type z --output {output.vcf}
+        bcftools consensus {output.vcf} --prefix {params.sequence_prefix} --fasta-ref {params.reference} --output {output.fasta}
+        """
+
+rule multiple_alignment:
+    input:
+        expand("consensus/{sample}.fasta", sample=sample_df.index)
+    output:
+        "mafft/alignment.txt"
+    log:
+        "mafft/log"
+    shell:
+        """
+        cat {input} | mafft --auto - > {output} 2> {log}
         """
