@@ -3,7 +3,7 @@ import pandas
 sample_df = pandas.read_table("sample_sheet.txt", index_col="sample")
 
 def get_subtype_reference(wildcards):
-    paf_df = pandas.read_table(f"megahit/{wildcards.sample}/contigs.paf", header=None)
+    paf_df = pandas.read_table(f"contig_assembly/{wildcards.sample}/contigs.paf", header=None)
 
     # find the most frequent contig match
     main_hit = paf_df.value_counts(5).index[0] # column index 5 is the reference sequence name
@@ -13,12 +13,12 @@ def get_subtype_reference(wildcards):
 rule all:
     input:
         expand("consensus/{sample}.fasta", sample=sample_df.index),
-        "mafft/alignment.txt",
         "multiqc_report.html"
 
 rule multiqc:
     input:
-        expand(["megahit/{sample}/{sample}.log", "align/{sample}.stats", "align/{sample}.covstats"], sample=sample_df.index)
+        expand(["contig_assembly/{sample}/{sample}.log", "align/{sample}.stats", "align/{sample}.covstats",
+                "consensus/{sample}.stats"], sample=sample_df.index)
     output:
         "multiqc_report.html"
     shell:
@@ -29,25 +29,25 @@ rule assembly:
         r1=lambda x: "reads/" + sample_df.loc[x.sample, "read1"],
         r2=lambda x: "reads/" + sample_df.loc[x.sample, "read2"]
     output:
-        "megahit/{sample}/{sample}.contigs.fa"
+        "contig_assembly/{sample}/{sample}.contigs.fa"
     threads: 1 # currently fails on Mac if more than one thread is used
     log:
-        "megahit/{sample}/{sample}.log"
+        "contig_assembly/{sample}/{sample}.log"
     shell:
         """
-        rm -rf megahit/{wildcards.sample}
-        megahit --num-cpu-threads {threads} -1 {input.r1} -2 {input.r2} -o megahit/{wildcards.sample} --out-prefix {wildcards.sample} 2> /dev/null
+        rm -rf contig_assembly/{wildcards.sample}
+        megahit --num-cpu-threads {threads} -1 {input.r1} -2 {input.r2} -o contig_assembly/{wildcards.sample} --out-prefix {wildcards.sample} 2> /dev/null
         """
 
 rule align_contigs:
     input:
-        "megahit/{sample}/{sample}.contigs.fa"
+        "contig_assembly/{sample}/{sample}.contigs.fa"
     output:
-        "megahit/{sample}/contigs.paf"
+        "contig_assembly/{sample}/contigs.paf"
     params:
         reference="reference/NCBI.fasta"
     log:
-        "megahit/{sample}.contig_minimap2.log"
+        "contig_assembly/{sample}/{sample}.contig_minimap2.log"
     threads: 3
     shell:
         "minimap2 -t {threads} {params.reference} {input} > {output} 2> {log}"
@@ -56,7 +56,7 @@ rule align_reads:
     input:
         r1=lambda x: "reads/" + sample_df.loc[x.sample, "read1"],
         r2=lambda x: "reads/" + sample_df.loc[x.sample, "read2"],
-        consensus="megahit/{sample}/contigs.paf"
+        contig_alignments="contig_assembly/{sample}/contigs.paf"
     output:
         bam="align/{sample}.bam"
     params:
@@ -76,10 +76,12 @@ rule align_reads:
 rule generate_consensus:
     input:
         alignments="align/{sample}.bam",
-        consensus="megahit/{sample}/contigs.paf"
+        contig_alignments="contig_assembly/{sample}/contigs.paf"
     output:
         vcf="consensus/{sample}.vcf.gz",
         fasta="consensus/{sample}.fasta"
+    log:
+        "consensus/{sample}.stats"
     params:
         reference=get_subtype_reference,
         sequence_prefix=lambda wildcards: f"{wildcards.sample}-",
@@ -88,6 +90,7 @@ rule generate_consensus:
         """
         bcftools mpileup --max-depth {params.depth} --redo-BAQ --output-type u --fasta-ref {params.reference} {input.alignments} | bcftools call --write-index --consensus-caller --variants-only --output-type z --output {output.vcf}
         bcftools consensus {output.vcf} --prefix {params.sequence_prefix} --fasta-ref {params.reference} --output {output.fasta}
+        bcftools stats {output.vcf} > {log}
         """
 
 rule multiple_alignment:
