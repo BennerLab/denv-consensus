@@ -38,16 +38,16 @@ def summarize_contig_paf(filename):
 rule all:
     input:
         expand("consensus/{sample}.fasta", sample=sample_df.index),
-        "multiqc_report.html"
+        "denv_report.html"
 
 rule multiqc:
     input:
         expand(["contig_assembly/{sample}/{sample}.log", "align/{sample}.stats", "align/{sample}.covstats",
-                "consensus/{sample}.stats", "contig_assembly/summary_mqc.txt"], sample=sample_df.index)
+                "consensus/{sample}.stats", "contig_assembly/summary_mqc.txt", "multiple_alignment/tree_mqc.html"], sample=sample_df.index)
     output:
-        "multiqc_report.html"
+        "denv_report.html"
     shell:
-        "multiqc --force --quiet --clean-up {input}"
+        "multiqc --force --quiet --clean-up --filename {output} {input}"
 
 rule assembly:
     input:
@@ -142,10 +142,24 @@ rule multiple_alignment:
     input:
         expand("consensus/{sample}.fasta", sample=sample_df.index)
     output:
-        "mafft/alignment.txt"
+        "multiple_alignment/alignment.txt"
     log:
-        "mafft/log"
+        "multiple_alignment/log"
     shell:
         """
         cat {input} | mafft --auto - > {output} 2> {log}
         """
+
+rule tree:
+    input:
+        "multiple_alignment/alignment.txt"
+    output:
+        iqtree="multiple_alignment/alignment.txt.iqtree",
+        tree="multiple_alignment/tree_mqc.html"
+    shell:
+        """
+        rm -f multiple_alignment/alignment.txt.ckp.gz
+        iqtree --quiet -s {input}
+        sed -n '/^MAXIMUM LIKELIHOOD TREE$/,/^ALISIM COMMAND$/{{/^ALISIM COMMAND$/d;p;}}' {output.iqtree} | awk 'BEGIN{{print "<html><body><pre>"}} {{print}} END{{print "</pre></body></html>"}}' > {output.tree}
+        """
+

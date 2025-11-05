@@ -1,3 +1,6 @@
+title: "DENV serotype analysis"
+intro_text: ""
+show_analysis_paths: False
 module_order:
   - megahit
   - custom_content
