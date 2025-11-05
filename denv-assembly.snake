@@ -2,6 +2,7 @@ import pandas
 
 sample_df = pandas.read_table("sample_sheet.txt", index_col="sample")
 
+
 def get_subtype_reference(wildcards):
     paf_df = pandas.read_table(f"contig_assembly/{wildcards.sample}/contigs.paf", header=None)
 
@@ -9,6 +10,30 @@ def get_subtype_reference(wildcards):
     main_hit = paf_df.value_counts(5).index[0] # column index 5 is the reference sequence name
 
     return f"reference/{main_hit}.fasta"
+
+def summarize_contig_paf(filename):
+    paf_df = pandas.read_table(filename, header=None)
+
+    # count contig matches to DENV references
+    count_df = paf_df.value_counts(5)
+
+    # get most common DENV reference and fraction of total
+    common_serotype = count_df.index[0]
+    contig_pct = float(count_df.iloc[0] / count_df.sum() * 100)
+
+    # column index 1 is the query (contig) length
+    # column index 9 is the number of residue matches
+    # column index 10 is the alignment block length
+    paf_df_sorted = paf_df.sort_values(1, ascending=False)
+    contig_max_length = paf_df_sorted.iloc[0, 1]
+    longest_serotype = paf_df_sorted.iloc[0, 5]
+    matched_region_pct = float(paf_df_sorted.iloc[0, 9] / paf_df_sorted.iloc[0, 10] * 100)
+
+    return {"Prevailing serotype": common_serotype,
+            "Prevailing serotype %": contig_pct,
+            "Longest contig": contig_max_length,
+            "Longest contig serotype": longest_serotype,
+            "Longest contig % identity": matched_region_pct}
 
 rule all:
     input:
@@ -18,11 +43,11 @@ rule all:
 rule multiqc:
     input:
         expand(["contig_assembly/{sample}/{sample}.log", "align/{sample}.stats", "align/{sample}.covstats",
-                "consensus/{sample}.stats"], sample=sample_df.index)
+                "consensus/{sample}.stats", "contig_assembly/summary_mqc.txt"], sample=sample_df.index)
     output:
         "multiqc_report.html"
     shell:
-        "multiqc --force {input}"
+        "multiqc --force --quiet --clean-up {input}"
 
 rule assembly:
     input:
@@ -51,6 +76,26 @@ rule align_contigs:
     threads: 3
     shell:
         "minimap2 -t {threads} {params.reference} {input} > {output} 2> {log}"
+
+rule report_serotype:
+    input:
+        expand("contig_assembly/{sample}/contigs.paf", sample=sample_df.index)
+    output:
+        "contig_assembly/summary_mqc.txt"
+    params:
+        sample_id=sample_df.index
+    run:
+        report_header = """# id: "Serotype identification"
+# description: "Find most commonly matched serotype among contigs in each sample"
+# plot_type: "table"\n"""
+
+        record_dict = {}
+        for sample_id, filename in zip(params.sample_id, input):
+            record_dict[sample_id] = summarize_contig_paf(filename)
+
+        with open(output[0], 'w') as f:
+            f.write(report_header)
+            pandas.DataFrame.from_dict(record_dict, orient="index").to_csv(f, index_label="Sample")
 
 rule align_reads:
     input:
