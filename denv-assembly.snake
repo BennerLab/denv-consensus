@@ -51,8 +51,8 @@ rule multiqc:
 
 rule assembly:
     input:
-        r1=lambda x: "reads/" + sample_df.loc[x.sample, "read1"],
-        r2=lambda x: "reads/" + sample_df.loc[x.sample, "read2"]
+        r1=lambda x: sample_df.loc[x.sample, "read1"],
+        r2=lambda x: sample_df.loc[x.sample, "read2"]
     output:
         "contig_assembly/{sample}/{sample}.contigs.fa"
     threads: 1 # currently fails on Mac if more than one thread is used
@@ -99,8 +99,8 @@ rule report_serotype:
 
 rule align_reads:
     input:
-        r1=lambda x: "reads/" + sample_df.loc[x.sample, "read1"],
-        r2=lambda x: "reads/" + sample_df.loc[x.sample, "read2"],
+        r1=lambda x: sample_df.loc[x.sample, "read1"],
+        r2=lambda x: sample_df.loc[x.sample, "read2"],
         contig_alignments="contig_assembly/{sample}/contigs.paf"
     output:
         bam="align/{sample}.bam"
